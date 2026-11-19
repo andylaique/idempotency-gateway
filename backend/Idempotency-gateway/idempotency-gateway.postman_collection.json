@@ -1,0 +1,294 @@
+{
+  "info": {
+    "name": "Idempotency Gateway",
+    "description": "Pay-Once Protocol API. Start the server (uvicorn main:app), then run the whole collection in order with the Collection Runner. Each run uses a fresh Idempotency-Key.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": ""
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Service is ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. First payment (processed, ~2s)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idempotencyKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/process-payment",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "process-payment"
+          ]
+        },
+        "description": "User Story 1. A new Idempotency-Key is generated before the request.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 100,\n  \"currency\": \"GHS\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('idempotencyKey', 'order-' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+              "pm.test('Message is Charged 100 GHS', () => pm.expect(pm.response.json().message).to.eql('Charged 100 GHS'));",
+              "pm.test('X-Cache-Hit is false', () => pm.expect(pm.response.headers.get('X-Cache-Hit')).to.eql('false'));",
+              "pm.collectionVariables.set('transactionId', pm.response.json().transaction_id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Retry same key and body (replayed, instant)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idempotencyKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/process-payment",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "process-payment"
+          ]
+        },
+        "description": "User Story 2. Same key and body: saved response returned without charging again.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 100,\n  \"currency\": \"GHS\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+              "pm.test('X-Cache-Hit is true', () => pm.expect(pm.response.headers.get('X-Cache-Hit')).to.eql('true'));",
+              "pm.test('Same transaction as the first request', () => pm.expect(pm.response.json().transaction_id).to.eql(pm.collectionVariables.get('transactionId')));",
+              "pm.test('No processing delay', () => pm.expect(pm.response.responseTime).to.be.below(1000));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Same key, different amount (422)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idempotencyKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/process-payment",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "process-payment"
+          ]
+        },
+        "description": "User Story 3. Reusing a key for a different payment is rejected.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 500,\n  \"currency\": \"GHS\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 422', () => pm.response.to.have.status(422));",
+              "pm.test('Correct error message', () => pm.expect(pm.response.json().detail).to.eql('Idempotency key already used for a different request body.'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Missing Idempotency-Key (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/process-payment",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "process-payment"
+          ]
+        },
+        "description": "The Idempotency-Key header is required.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 100,\n  \"currency\": \"GHS\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Invalid amount (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "invalid-{{$timestamp}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/process-payment",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "process-payment"
+          ]
+        },
+        "description": "Amount must be greater than 0.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": -5,\n  \"currency\": \"GHS\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": ""
+    },
+    {
+      "key": "transactionId",
+      "value": ""
+    }
+  ]
+}
